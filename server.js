@@ -2,68 +2,78 @@ const net = require("net");
 const AddressInfo = require("./AddressInfo");
 const RPCMethods = require("./RPCMethods");
 
-let serverInfo; // информация об адресе сервера
-let connectedClients = []; // адреса подключенных клиентов
-let openConnections = {}; // установленные соединения с клиентами
+class Server {
+  serverInfo; // информация об адресе сервера
+  connectedClients = []; // адреса подключенных клиентов
+  openConnections = {}; // установленные соединения с клиентами
+  port;
 
-const server = net.createServer(connection => {
-  let currentClientsServerConnection;
+  constructor(port) {
+    this.port = port;
+  }
 
-  connection.on('error', (err) => logout(currentClientsServerConnection));
-  connection.on('close', (err) => logout(currentClientsServerConnection));
+  run() {
+    const server = net.createServer(connection => {
+      let currentClientsServerConnection;
 
-  connection.on('data', (data) => {
-    let request = JSON.parse(data.toString());
-    switch (request.method) {
-      case "login": {
-        currentClientsServerConnection = newLogIn(request.params[0], request.params[1]);
-        broadcastClientsUpdated();
-      } break;
+      connection.on('error', () => this.logout(currentClientsServerConnection));
+      connection.on('close', () => this.logout(currentClientsServerConnection));
+
+      connection.on('data', (data) => {
+        let request = JSON.parse(data.toString());
+        switch (request.method) {
+          case "login": {
+            currentClientsServerConnection = this.newLogIn(request.params[0], request.params[1]);
+            this.broadcastClientsUpdated();
+          } break;
+        }
+      });
+    });
+
+    server.listen(this.port, () => {
+      this.serverInfo = new AddressInfo(server.address().address, server.address().port);
+
+      console.info("Server started: " + this.serverInfo);
+    });
+  }
+
+  newLogIn(address, port) {
+    let connectionInfo = new AddressInfo(address, port);
+
+    console.info("New connection: " + connectionInfo);
+
+    this.connectedClients.push(connectionInfo);
+
+    return connectionInfo;
+  }
+
+  logout(addressInfo) {
+    if (this.connectedClients.filter(v => v.address === addressInfo.address && v.port === addressInfo.port).length === 0)
+      return;
+
+    this.connectedClients = this.connectedClients.filter(v => !(v.address === addressInfo.address && v.port === addressInfo.port));
+    console.log("Disconnected: " + addressInfo);
+    this.broadcastClientsUpdated();
+  }
+
+  getConnection(clientAddress) {
+    let hash = clientAddress.address + '-' + clientAddress.port;
+    if (!(hash in this.openConnections)) {
+      let connect = net.connect(clientAddress.port, clientAddress.address);
+      this.openConnections[hash] = connect;
+
+      connect.on("error", () => this.logout(clientAddress));
     }
-  });
-
-});
-
-server.listen(39874,socket => {
-  serverInfo = new AddressInfo(server.address().address, server.address().port);
-
-  console.info("Server started: "+serverInfo);
-});
-
-function newLogIn(address, port) {
-  let connectionInfo = new AddressInfo(address, port);
-
-  console.info("New connection: " + connectionInfo);
-
-  connectedClients.push(connectionInfo);
-
-  return connectionInfo;
-}
-
-function logout(addressInfo) {
-  if (connectedClients.filter(v => v.address === addressInfo.address && v.port === addressInfo.port).length === 0)
-    return;
-
-  connectedClients = connectedClients.filter(v => !(v.address === addressInfo.address && v.port === addressInfo.port));
-  console.log("Disconnected: "+addressInfo);
-  broadcastClientsUpdated();
-}
-
-function getConnection(clientAddress) {
-  let hash = clientAddress.address + '-' + clientAddress.port;
-  if (!(hash in openConnections)) {
-    let connect = net.connect(clientAddress.port, clientAddress.address);
-    openConnections[hash] = connect;
-
-    connect.on("error", err => logout(clientAddress));
+    return this.openConnections[hash];
   }
-  return openConnections[hash];
-}
 
-function broadcastClientsUpdated() {
-  for (let i = 0; i < connectedClients.length; i++) {
-    let clientAddress = connectedClients[i];
-    getConnection(clientAddress).write(JSON.stringify(RPCMethods.updateClients(connectedClients)));
+  broadcastClientsUpdated() {
+    for (let i = 0; i < this.connectedClients.length; i++) {
+      let clientAddress = this.connectedClients[i];
+      this.getConnection(clientAddress).write(JSON.stringify(RPCMethods.updateClients(this.connectedClients)));
+    }
   }
 }
 
+const server = new Server(39874);
+server.run();
